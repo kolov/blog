@@ -1,4 +1,4 @@
-#From Zero to Continuous Delivery to Kubernetes on AWS in 2 hours
+# From Zero to Continuous Delivery to Kubernetes on AWS in 2 hours
 
 For a developer, Kubernetes is a dream platform to develop for. 
 Especially in the microservices world, it is great to have acces to its simple powerful API. 
