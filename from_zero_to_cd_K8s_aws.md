@@ -9,6 +9,11 @@ Some time ago I had set up a small cluster on GKE with CircleCI deploying live.
 <a href="https://github.com/kubernetes/kops">Kops</a> claims to make using AWS as simple as GKE, 
 so this weekend I decided to move a GKE cluster, including configurati and applications to AWS. 
 
+## The Goal
+All wen need in the beginning ia an existing project that builds a docker image. We will create the cubernetes 
+cluster 
+and will setup a process that builds a docker image and deploys it to the cluster on every change.
+
 ## Kubernetes on AWS
 First, create the cluster. Coosing the simplest DNS option, a fully operation cluster can be set up with just 
 the following commands:
@@ -31,27 +36,102 @@ Service` and create the repository. The build process need push access to that r
 `arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser` policy. Note its Access Key ID and Secret Key for use by 
 the build process.
 
+## The project
+
+A project that build a docker file needs:
+* Dockerfle
+* Kubernetes deployment descriptor
+* Kubernetes servcie descriptor
+
+While `Dockerfile` is specific to the projects, here is a sample `k8s-deployment.yml`:
+
+    apiVersion: extensions/v1beta1
+    kind: Deployment
+    metadata:
+      name: %APP_NAME%
+    spec:
+      replicas: 1
+      template:
+        metadata:
+          labels:
+            app: %APP_NAME%
+        spec:
+          containers:
+          - name: %APP_NAME%
+            image: %REGISTRY%/%APP_NAME%:%VERSION%
+            ports:
+            - containerPort: 80
+            
+`k8s-service.yml`:
+            
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: curriculi-fe
+    spec:
+      type: NodePort
+      ports:
+        - name: curriculi-fe
+          port: 80
+          targetPort: 80
+      selector:
+        app: curriculi-fe
+
 ## CircleCI
 
-There mare certainly many cjoices for a CI server, but we want to be redy in one houre - go directly to CircleCI. They
-offer a free 1500 hours/month plan, isn't that insane? After you have a account, select a project to build. A file 
-named `circleci.yml` defined the build:
+Certainly there are  many choices for a CI server, but we want to be redy in one hour - go directly to 
+CircleCI and create an account if you don't have one already. They
+offer a free 1500 hours/month plan - this is 50 building hours a day, isn't that insane? After you have a account, 
+select a project to build. A file 
+named `circleci.yml` defined the build. An example of a Scala project
 
     machine:
+      node:
+        version: 6.11.2
       services:
         - docker
-      environment:
-        APP_NAME: curriculi-docs-service
-        BUILD_TARGET_DIR: .
+      environment: 
+        BUILD_TARGET_DIR: dist
+        APP_NAME: curriculi-fe
     
     dependencies:
       cache_directories:
-          - "~/.ivy2"
-          - "~/.sbt"
+        - node_modules
+        - code/server/node_modules
+        - code/client/node_modules
+        - code/client/vendor
       override:
-        - sbt universal:packageZipTarball
-        - wget https://raw.githubusercontent.com/kolov/k8s-stuff/master/circleci/deploy-aws.sh
-        - chmod +x deploy-aws.sh
-        - ./deploy-aws.sh
+        - npm install
+        - npm install -g bower gulp
+        - bower install
+        - gulp build
+    
+    
+    deployment:
+      prod:
+        branch: master
+        commands:
+          - cp docker/nginx/nginx.conf dist
+          - cp docker/nginx/Dockerfile dist
+          - wget https://raw.githubusercontent.com/kolov/k8s-stuff/master/circleci/deploy-aws.sh
+          - chmod +x deploy-aws.sh
+          - ./deploy-aws.sh
         
 ## The build script
+
+
+		set +x
+		curl -LO https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl
+		chmod +x kubectl
+		mkdir ~/.kube
+		echo $KUBECONFIGDATA | base64 --decode --ignore-garbage > ~/.kube/config
+		eval $(aws ecr get-login)
+		docker build --rm=false -t $AWS_ACCOUNT_ID.dkr.ecr.eu-central-1.amazonaws.com/$APP_NAME:$CIRCLE_SHA1 $BUILD_TARGET_DIR
+		REGISTRY=$AWS_ACCOUNT_ID.dkr.ecr.eu-central-1.amazonaws.com
+		docker push $REGISTRY/$APP_NAME:$CIRCLE_SHA1
+		sed -e s/%VERSION%/$CIRCLE_SHA1/g -e s/%APP_NAME%/$APP_NAME/g -e s/%REGISTRY%/$REGISTRY/g k8s-deployment.yml > k8s-deployment-latest.yml
+		./kubectl apply -f k8s-deployment-latest.yml
+		./kubectl apply -f k8s-service.yml
+		
+
+{% include disqus.html %}
